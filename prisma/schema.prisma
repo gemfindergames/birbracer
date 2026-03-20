@@ -1,0 +1,167 @@
+// BirbRacer — Prisma Schema
+// Database: SQLite (swap to Postgres later with minimal changes)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────
+// USER
+// ─────────────────────────────────────────────
+
+model User {
+  id            String   @id @default(cuid())
+  username      String   @unique
+  passwordHash  String
+  isAdmin       Boolean  @default(false)
+  isBanned      Boolean  @default(false)
+
+  // Avatar: either an emoji string OR a path to uploaded image
+  avatarEmoji   String?  @default("🐦")
+  avatarImage   String?
+
+  // Security / moderation (admin-visible only)
+  ipAddress     String?
+  country       String?
+  countryCode   String?
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // Relations
+  participants  RaceParticipant[]
+  carSelections CarSelection[]
+  emojiReactions EmojiReaction[]
+  sessions      Session[]
+}
+
+// ─────────────────────────────────────────────
+// SESSION
+// ─────────────────────────────────────────────
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// ─────────────────────────────────────────────
+// RACE
+// ─────────────────────────────────────────────
+// States: LOBBY → CAR_SELECT → COUNTDOWN → RACING → FINISHED → ARCHIVED
+
+model Race {
+  id          String    @id @default(cuid())
+  name        String
+  status      String    @default("LOBBY")
+  trackId     String    @default("desert")
+  maxPlayers  Int       @default(8)
+
+  // Scheduled start (optional — null means start manually)
+  scheduledAt DateTime?
+
+  // Secret admin-only: predetermined winner (null = random)
+  riggedWinnerId String?
+
+  // Timestamps for each phase
+  createdAt   DateTime  @default(now())
+  startedAt   DateTime?
+  finishedAt  DateTime?
+
+  // Race config
+  raceDuration Int     @default(15) // seconds the race animation lasts
+
+  // Relations
+  participants  RaceParticipant[]
+  carSelections CarSelection[]
+  emojiReactions EmojiReaction[]
+  results       RaceResult[]
+}
+
+// ─────────────────────────────────────────────
+// RACE PARTICIPANT
+// ─────────────────────────────────────────────
+
+model RaceParticipant {
+  id       String @id @default(cuid())
+  raceId   String
+  userId   String
+  joinedAt DateTime @default(now())
+
+  // Lane assignment (set when race starts)
+  lane     Int?
+
+  race Race @relation(fields: [raceId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([raceId, userId])
+}
+
+// ─────────────────────────────────────────────
+// CAR SELECTION
+// ─────────────────────────────────────────────
+// Handles the lock → confirm flow
+// lockStatus: LOCKED | CONFIRMED | EXPIRED
+
+model CarSelection {
+  id         String   @id @default(cuid())
+  raceId     String
+  userId     String
+  carId      String   // matches CarConfig.id from lib/cars.ts
+
+  lockStatus String   @default("LOCKED")
+  lockedAt   DateTime @default(now())
+  lockedUntil DateTime // 10 seconds after lockedAt
+  confirmedAt DateTime?
+
+  race Race @relation(fields: [raceId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([raceId, userId])    // one selection per user per race
+  @@unique([raceId, carId])     // one car per race (first come first serve)
+}
+
+// ─────────────────────────────────────────────
+// RACE RESULT
+// ─────────────────────────────────────────────
+
+model RaceResult {
+  id        String @id @default(cuid())
+  raceId    String
+  userId    String
+  carId     String
+
+  position  Int       // 1st, 2nd, 3rd...
+  finishTime Float    // seconds from race start
+
+  createdAt DateTime @default(now())
+
+  race Race @relation(fields: [raceId], references: [id], onDelete: Cascade)
+
+  @@unique([raceId, userId])
+  @@unique([raceId, position])
+}
+
+// ─────────────────────────────────────────────
+// EMOJI REACTION
+// ─────────────────────────────────────────────
+
+model EmojiReaction {
+  id        String   @id @default(cuid())
+  raceId    String
+  userId    String
+  emoji     String   // the emoji character(s)
+  createdAt DateTime @default(now())
+
+  race Race @relation(fields: [raceId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
